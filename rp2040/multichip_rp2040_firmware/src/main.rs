@@ -5,21 +5,25 @@
 #![no_std]
 #![no_main]
 
+use cyw43::Control;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_rp::{bind_interrupts, Peripherals};
-use embassy_rp::gpio::{Level, Output};
-use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
+use embassy_rp::{bind_interrupts};
+use embassy_rp::gpio::{Level, Output, AnyPin, Pin};
+use embassy_rp::peripherals::{DMA_CH0, PIN_10, PIO0, USB};
 use embassy_rp::pio::{Pio};
 use embassy_rp::usb::{Driver, Instance};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::mutex::Mutex;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config};
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Ticker, Timer};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
+use log::log;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
@@ -31,11 +35,39 @@ async fn wifi_task(runner: cyw43::Runner<'static, Output<'static>, PioSpi<'stati
     runner.run().await
 }
 
+#[embassy_executor::task]
+async fn logger_task(driver: Driver<'static, USB>) {
+    embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
+}
+type LedType = Mutex<ThreadModeRawMutex, Option<Output<'static>>>;
+static WHITE_LED: LedType = Mutex::new(None);
+static GREEN_LED: LedType = Mutex::new(None);
+static RED_LED: LedType = Mutex::new(None);
+static BLUE_LED: LedType = Mutex::new(None);
+static BACKLIGHT: LedType = Mutex::new(None);
+
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     info!("Hello there!");
 
     let p = embassy_rp::init(Default::default());
+
+    let white_led = Output::new(AnyPin::from(p.PIN_9), Level::Low);
+    let green_led = Output::new(AnyPin::from(p.PIN_10), Level::Low);
+    let red_led = Output::new(AnyPin::from(p.PIN_12), Level::Low);
+    let blue_led = Output::new(AnyPin::from(p.PIN_11), Level::Low);
+    let backlight = Output::new(AnyPin::from(p.PIN_13), Level::Low);
+    // inner scope is so that once the mutex is written to, the MutexGuard is dropped, thus the
+    // Mutex is released
+    {
+        *(WHITE_LED.lock().await) = Some(white_led);
+        *(GREEN_LED.lock().await) = Some(green_led);
+        *(RED_LED.lock().await) = Some(red_led);
+        *(BLUE_LED.lock().await) = Some(blue_led);
+        *(BACKLIGHT.lock().await) = Some(backlight);
+    }
+
     let fw = include_bytes!("../firmware/43439A0.bin");
     let clm = include_bytes!("../firmware/43439A0_clm.bin");
 
@@ -87,6 +119,7 @@ async fn main(spawner: Spawner) {
     let mut control_buf = [0; 64];
 
     let mut state = State::new();
+    let mut logger_state = State::new();
 
     let mut builder = Builder::new(
         usb_driver,
@@ -100,40 +133,64 @@ async fn main(spawner: Spawner) {
     // Create classes on the builder.
     let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
 
+    // Create Logger class
+    let logger_class = CdcAcmClass::new(&mut builder, &mut logger_state, 64);
+
+    // Creates the logger and returns the logger future
+    // Note: You'll need to use log::info! afterwards instead of info! for this to work (this also applies to all the other log::* macros)
+    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Info, logger_class);
+
     // Build the builder.
     let mut usb = builder.build();
 
-    // Run the USB device.
     let usb_fut = usb.run();
 
-    // Do stuff with the class!
     let echo_fut = async {
         loop {
             class.wait_connection().await;
-            let _ = class.write_packet("Arse".as_ref()).await;
-            info!("Connected");
+            log::info!("Connected");
             let _ = echo(&mut class).await;
-            info!("Disconnected");
+            log::info!("Disconnected");
         }
     };
 
+    let blinken_lights_future = async {
+        let mut state_of_led = false;
+
+        loop {
+            log::info!("Toggling LED");
+            Timer::after(Duration::from_millis(1000)).await;
+            state_of_led = !state_of_led;
+            control.gpio_set(0, state_of_led).await;
+        }
+    };
+    unwrap!(spawner.spawn(toggle_led(&WHITE_LED,Duration::from_hz(10))));
+    unwrap!(spawner.spawn(toggle_led(&GREEN_LED,Duration::from_hz(9))));
+    unwrap!(spawner.spawn(toggle_led(&RED_LED,Duration::from_hz(8))));
+    unwrap!(spawner.spawn(toggle_led(&BLUE_LED,Duration::from_hz(11))));
+    unwrap!(spawner.spawn(toggle_led(&BACKLIGHT,Duration::from_hz(15))));
+
+    log::info!("Fuuuck");
     // Run everything concurrently.
     // If we had made everything `'static` above instead, we could do this using separate tasks instead.
-    join(usb_fut, echo_fut).await;
-
-
-    let delay = Duration::from_secs(1);
-    loop {
-        info!("led on!");
-        control.gpio_set(0, true).await;
-        Timer::after(delay).await;
-
-        info!("led off!");
-        control.gpio_set(0, false).await;
-        Timer::after(delay).await;
-    }
+    join(join(blinken_lights_future,usb_fut), join(echo_fut, log_fut)).await;
 }
 
+#[embassy_executor::task(pool_size = 5)]
+async fn toggle_led(led: &'static LedType, delay: Duration) {
+    let mut ticker = Ticker::every(delay);
+    loop {
+        {
+            let mut led_unlocked = led.lock().await;
+            //log::info!("Toggling LED");
+            if let Some(pin_ref) = led_unlocked.as_mut() {
+                pin_ref.toggle();
+            }
+        }
+
+        ticker.next().await;
+    }
+}
 
 struct Disconnected {}
 

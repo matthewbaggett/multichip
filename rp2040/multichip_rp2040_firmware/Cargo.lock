@@ -507,6 +507,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-usb-logger"
+version = "0.1.0"
+source = "git+https://github.com/embassy-rs/embassy#328cb99068c3b75489969406dceddc7783882df1"
+dependencies = [
+ "embassy-futures",
+ "embassy-sync",
+ "embassy-usb",
+ "log",
+]
+
+[[package]]
 name = "embedded-graphics-core"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -901,6 +912,8 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embassy-usb",
+ "embassy-usb-logger",
+ "log",
  "panic-probe",
  "portable-atomic",
  "st7789",

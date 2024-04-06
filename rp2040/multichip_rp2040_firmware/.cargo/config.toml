@@ -15,3 +15,6 @@ target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
 
 [env]
 DEFMT_LOG = "debug"
+
+[profile.release]
+debug = 2
