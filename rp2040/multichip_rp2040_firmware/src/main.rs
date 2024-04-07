@@ -1,24 +1,17 @@
-//! This example test the RP Pico W on board LED.
-//!
-//! It does not work with the RP Pico board. See blinky.rs.
-
 #![no_std]
 #![no_main]
-
-extern crate alloc;
 
 use cyw43::Control;
 use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::join::{join,join3};
 use embassy_rp::{bind_interrupts};
 use embassy_rp::gpio::{Level, Input, Output, AnyPin, Pin, Pull};
 use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
 use embassy_rp::pio::{Pio};
 use embassy_rp::usb::{Driver, Instance};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::blocking_mutex::ThreadModeMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
@@ -53,6 +46,7 @@ static JOGBALL_LEFT: JogballButtonType = Mutex::new(None);
 static JOGBALL_RIGHT: JogballButtonType = Mutex::new(None);
 static JOGBALL_CLICK: ButtonType = Mutex::new(None);
 
+#[derive(Clone, Copy)]
 enum JogBall {
     UP,
     DOWN,
@@ -76,9 +70,9 @@ async fn main(spawner: Spawner) {
     let p = embassy_rp::init(Default::default());
 
     // Configure button/jogball inputs
-    let jogball_up = Input::new(p.PIN_3, Pull::None);
+    let jogball_up = Input::new(p.PIN_7, Pull::None);
     let jogball_down = Input::new(p.PIN_8, Pull::None);
-    let jogball_left = Input::new(p.PIN_7, Pull::None);
+    let jogball_left = Input::new(p.PIN_3, Pull::None);
     let jogball_right = Input::new(p.PIN_6, Pull::None); // verified
     let jogball_click = Input::new(p.PIN_2, Pull::Up);
     {
@@ -89,13 +83,6 @@ async fn main(spawner: Spawner) {
         *(JOGBALL_RIGHT.lock().await) = Some(jogball_right);
         *(JOGBALL_CLICK.lock().await) = Some(jogball_click);
     }
-
-    unwrap!(spawner.spawn(jogball(&JOGBALL_UP, CHANNEL_JOGBALL.sender(), JogBall::UP)));
-    unwrap!(spawner.spawn(jogball(&JOGBALL_DOWN, CHANNEL_JOGBALL.sender(), JogBall::DOWN)));
-    unwrap!(spawner.spawn(jogball(&JOGBALL_LEFT, CHANNEL_JOGBALL.sender(), JogBall::LEFT)));
-    unwrap!(spawner.spawn(jogball(&JOGBALL_RIGHT, CHANNEL_JOGBALL.sender(), JogBall::RIGHT)));
-    unwrap!(spawner.spawn(click(&JOGBALL_CLICK, CHANNEL_JOGBALL.sender(), JogBall::CLICK)));
-
 
     // Configure various directly driven LEDs
     let white_led = Output::new(AnyPin::from(p.PIN_9), Level::Low);
@@ -111,6 +98,20 @@ async fn main(spawner: Spawner) {
         *(BLUE_LED.lock().await) = Some(blue_led);
         *(BACKLIGHT.lock().await) = Some(backlight);
     }
+
+
+    let jogball_fut = async {
+        log::info!("Awaiting Jogball changes");
+        loop{
+            match CHANNEL_JOGBALL.receive().await {
+                JogBall::CLICK => log::info!("Jogball CLICK"),
+                JogBall::UP => log::info!("Jogball Up"),
+                JogBall::DOWN => log::info!("Jogball Down"),
+                JogBall::LEFT => log::info!("Jogball Left"),
+                JogBall::RIGHT => log::info!("Jogball Right"),
+            }
+        }
+    };
 
     let fw = include_bytes!("../firmware/43439A0.bin");
     let clm = include_bytes!("../firmware/43439A0_clm.bin");
@@ -174,10 +175,8 @@ async fn main(spawner: Spawner) {
     );
 
     // Create classes on the builder.
-    let mut serial_acm_class = CdcAcmClass::new(&mut builder, &mut state, 64);
-
-    // Create Logger class
     let serial_logger_acm_class = CdcAcmClass::new(&mut builder, &mut logger_state, 64);
+    let mut serial_acm_class = CdcAcmClass::new(&mut builder, &mut state, 64);
 
     // Creates the logger and returns the logger future
     // Note: You'll need to use log::info! afterwards instead of info! for this to work (this also applies to all the other log::* macros)
@@ -205,28 +204,39 @@ async fn main(spawner: Spawner) {
             control.gpio_set(0, state_of_led).await;
         }
     };
+
+    // Led Tasks
     unwrap!(spawner.spawn(toggle_led(&WHITE_LED,Duration::from_hz(10))));
     unwrap!(spawner.spawn(toggle_led(&GREEN_LED,Duration::from_hz(9))));
     unwrap!(spawner.spawn(toggle_led(&RED_LED,Duration::from_hz(8))));
     unwrap!(spawner.spawn(toggle_led(&BLUE_LED,Duration::from_hz(11))));
     unwrap!(spawner.spawn(toggle_led(&BACKLIGHT,Duration::from_hz(15))));
 
+    // Jogball tasks
+    unwrap!(spawner.spawn(jogball(&JOGBALL_UP,    CHANNEL_JOGBALL.sender(), JogBall::UP)));
+    unwrap!(spawner.spawn(jogball(&JOGBALL_DOWN,  CHANNEL_JOGBALL.sender(), JogBall::DOWN)));
+    unwrap!(spawner.spawn(jogball(&JOGBALL_LEFT,  CHANNEL_JOGBALL.sender(), JogBall::LEFT)));
+    unwrap!(spawner.spawn(jogball(&JOGBALL_RIGHT, CHANNEL_JOGBALL.sender(), JogBall::RIGHT)));
+    unwrap!(spawner.spawn(click(&JOGBALL_CLICK,   CHANNEL_JOGBALL.sender(), JogBall::CLICK)));
 
-    log::info!("Fuuuck");
+    log::info!("Starting up MultiChip on RP2040!");
     // Run everything concurrently.
     // If we had made everything `'static` above instead, we could do this using separate tasks instead.
-    join(join(blinken_lights_future,usb_fut), join(echo_fut, log_fut)).await;
+    join3(
+        jogball_fut,
+        join(blinken_lights_future,usb_fut),
+        join(echo_fut, log_fut)
+    ).await;
 }
 
-
-
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = 4)]
 async fn jogball(jogball_btn: &'static JogballButtonType, control: Sender<'static, ThreadModeRawMutex, JogBall,64>, direction: JogBall){
 
     loop {
         let mut jogball_btn_unlocked  = jogball_btn.lock().await;
         jogball_btn_unlocked.as_mut().unwrap().wait_for_any_edge().await;
-        control.send(direction);
+        //log::info!("WHOOP jogball direction");
+        control.send(direction).await;
     }
 }
 #[embassy_executor::task]
@@ -235,7 +245,8 @@ async fn click(btn: &'static ButtonType, control: Sender<'static, ThreadModeRawM
     loop {
         let mut btn_unlocked  = btn.lock().await;
         btn_unlocked.as_mut().unwrap().wait_for_falling_edge().await;
-        control.send(direction);
+        //log::info!("WHOOP jogball click");
+        control.send(direction).await;
     }
 }
 
