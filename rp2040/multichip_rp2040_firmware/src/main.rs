@@ -12,7 +12,7 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::{bind_interrupts};
 use embassy_rp::gpio::{Level, Output, AnyPin, Pin};
-use embassy_rp::peripherals::{DMA_CH0, PIN_10, PIO0, USB};
+use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
 use embassy_rp::pio::{Pio};
 use embassy_rp::usb::{Driver, Instance};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
