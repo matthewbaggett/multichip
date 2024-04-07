@@ -15,7 +15,6 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
-use embassy_usb::{Builder, Config};
 use embassy_usb_logger;
 use embassy_sync::channel::{Channel, Sender};
 use embassy_time::{Duration, Ticker, Timer};
@@ -143,7 +142,7 @@ async fn main(spawner: Spawner) {
     let usb_driver = Driver::new(p.USB, Irqs);
 
     // Create embassy-usb Config
-    let mut config = Config::new(0xc0de, 0xcafe);
+    let mut config = embassy_usb::Config::new(0xc0de, 0xcafe);
     config.manufacturer = Some("MultiChip");
     config.product = Some("USB-serial example");
     config.serial_number = Some("12345678");
@@ -165,7 +164,7 @@ async fn main(spawner: Spawner) {
     let mut state = State::new();
     let mut logger_state = State::new();
 
-    let mut builder = Builder::new(
+    let mut builder = embassy_usb::Builder::new(
         usb_driver,
         config,
         &mut config_descriptor,
@@ -235,7 +234,6 @@ async fn jogball(jogball_btn: &'static JogballButtonType, control: Sender<'stati
     loop {
         let mut jogball_btn_unlocked  = jogball_btn.lock().await;
         jogball_btn_unlocked.as_mut().unwrap().wait_for_any_edge().await;
-        //log::info!("WHOOP jogball direction");
         control.send(direction).await;
     }
 }
@@ -245,7 +243,6 @@ async fn click(btn: &'static ButtonType, control: Sender<'static, ThreadModeRawM
     loop {
         let mut btn_unlocked  = btn.lock().await;
         btn_unlocked.as_mut().unwrap().wait_for_falling_edge().await;
-        //log::info!("WHOOP jogball click");
         control.send(direction).await;
     }
 }
