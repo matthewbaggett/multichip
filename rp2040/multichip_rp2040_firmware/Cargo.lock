@@ -919,6 +919,7 @@ dependencies = [
  "log",
  "panic-probe",
  "portable-atomic",
+ "rp2040-boot2",
  "st7789",
  "static_cell",
 ]

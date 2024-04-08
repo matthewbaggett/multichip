@@ -26,3 +26,4 @@ portable-atomic = { version = "1.5", features = ["critical-section"] }
 
 st7789 = "0.7.0"
 log = "0.4.21"
+rp2040-boot2 = { version = "0.3" }

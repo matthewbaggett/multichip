@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+
 use cyw43::Control;
 use cyw43_pio::PioSpi;
 use defmt::*;
@@ -21,6 +22,12 @@ use embassy_time::{Duration, Ticker, Timer};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 use log::log;
+use rp2040_boot2;
+
+#[link_section = ".boot_loader"]
+#[used]
+pub static BOOT_LOADER: [u8; 16384] =
+    *include_bytes!("../firmware/serial-bootloader.bin");
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
