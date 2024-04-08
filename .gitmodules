@@ -1,3 +1,9 @@
 [submodule "rp2040/rp2040-serial-bootloader"]
 	path = rp2040/rp2040-serial-bootloader
 	url = https://github.com/usedbytes/rp2040-serial-bootloader.git
+[submodule "rv1106/serial-flash"]
+	path = rv1106/serial-flash
+	url = git@github.com:usedbytes/serial-flash.git
+[submodule "rv1106/luckfox-sdk"]
+	path = rv1106/luckfox-sdk
+	url = git@github.com:LuckfoxTECH/luckfox-pico.git

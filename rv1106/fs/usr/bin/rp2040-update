@@ -1,0 +1,5 @@
+#!/bin/sh
+rp2040-flash-enable
+rp2040-reset &
+serial-flash /dev/ttyS4 /root/rp2040-firmware.elf
+rp2040-flash-disable
