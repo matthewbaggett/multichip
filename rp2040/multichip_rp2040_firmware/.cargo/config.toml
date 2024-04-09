@@ -4,14 +4,10 @@ runner = "elf2uf2-rs --deploy --serial"
 rustflags = [
   #    "-C", "linker=flip-link",
 
-  "-C",
-  "link-arg=--nmagic",
-  "-C",
-  "link-arg=-Tlink.x",
-  "-C",
-  "link-arg=-Tlink-rp.x",
-  "-C",
-  "link-arg=-Tdefmt.x",
+  "-C", "link-arg=--nmagic",
+  "-C", "link-arg=-Tlink.x",
+  #"-C", "link-arg=-Tlink-rp.x",
+  "-C", "link-arg=-Tdefmt.x",
 
 
   # Code-size optimizations.
