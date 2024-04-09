@@ -2,7 +2,7 @@ MEMORY
 {
   /* NOTE 1 K = 1 KiBi = 1024 bytes */
   /* To suit Raspberry Pi RP2040 SoC */
-  BOOT_LOADER : ORIGIN = 0x10000000, LENGTH = 16k
+  BOOT_LOADER : ORIGIN = 0x10000000, LENGTH = 0x100
   /* Adjust this to suit the size of your specific flash chip */
   FLASH : ORIGIN = 0x10000000 + 16k, LENGTH = 2048K - 16k - 0x100
   BOOT2 : ORIGIN = 0x10000000 + 2048K - 0x100, LENGTH = 0x100
