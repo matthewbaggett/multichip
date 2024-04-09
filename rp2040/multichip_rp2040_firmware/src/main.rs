@@ -1,26 +1,22 @@
 #![no_std]
 #![no_main]
 
-use cyw43::Control;
-use cyw43_pio::PioSpi;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join3};
 use embassy_rp::bind_interrupts;
-use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pin, Pull};
-use embassy_rp::peripherals::{DMA_CH0, PIO0, USB};
-use embassy_rp::pio::Pio;
+use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
+use embassy_rp::peripherals::{PIO0, USB};
+
 use embassy_rp::usb::{Driver, Instance};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::{Channel, Sender};
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Ticker, Timer};
+use embassy_time::{Duration, Ticker};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb_logger;
-use log::log;
-use rp2040_boot2;
-use static_cell::StaticCell;
+
 use {defmt_rtt as _, panic_probe as _};
 
 #[link_section = ".boot_loader"]
@@ -31,13 +27,6 @@ bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
     USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
 });
-
-#[embassy_executor::task]
-async fn wifi_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-) -> ! {
-    runner.run().await
-}
 
 #[embassy_executor::task]
 async fn logger_task(driver: Driver<'static, USB>) {
@@ -63,6 +52,7 @@ enum JogBall {
 static CHANNEL_JOGBALL: Channel<ThreadModeRawMutex, JogBall, 64> = Channel::new();
 
 type LedType = Mutex<ThreadModeRawMutex, Option<Output<'static>>>;
+static DEBUG_LED: LedType = Mutex::new(None);
 static WHITE_LED: LedType = Mutex::new(None);
 static GREEN_LED: LedType = Mutex::new(None);
 static RED_LED: LedType = Mutex::new(None);
@@ -91,6 +81,7 @@ async fn main(spawner: Spawner) {
     }
 
     // Configure various directly driven LEDs
+    let debug_led = Output::new(AnyPin::from(p.PIN_25), Level::Low);
     let white_led = Output::new(AnyPin::from(p.PIN_9), Level::Low);
     let green_led = Output::new(AnyPin::from(p.PIN_10), Level::Low);
     let red_led = Output::new(AnyPin::from(p.PIN_12), Level::Low);
@@ -98,6 +89,7 @@ async fn main(spawner: Spawner) {
     let backlight = Output::new(AnyPin::from(p.PIN_13), Level::Low);
     {
         // inner scope is so that once the mutex is written to, the MutexGuard is dropped, thus the Mutex is released
+        *(DEBUG_LED.lock().await) = Some(debug_led);
         *(WHITE_LED.lock().await) = Some(white_led);
         *(GREEN_LED.lock().await) = Some(green_led);
         *(RED_LED.lock().await) = Some(red_led);
@@ -117,39 +109,6 @@ async fn main(spawner: Spawner) {
             }
         }
     };
-
-    let fw = include_bytes!("../firmware/43439A0.bin");
-    let clm = include_bytes!("../firmware/43439A0_clm.bin");
-
-    // To make flashing faster for development, you may want to flash the firmwares independently
-    // at hardcoded addresses, instead of baking them into the program with `include_bytes!`:
-    //     probe-rs download 43439A0.bin --format bin --chip RP2040 --base-address 0x10100000
-    //     probe-rs download 43439A0_clm.bin --format bin --chip RP2040 --base-address 0x10140000
-    //let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 230321) };
-    //let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
-
-    let pwr = Output::new(p.PIN_23, Level::Low);
-    let cs = Output::new(p.PIN_25, Level::High);
-    let mut pio = Pio::new(p.PIO0, Irqs);
-    let spi = PioSpi::new(
-        &mut pio.common,
-        pio.sm0,
-        pio.irq0,
-        cs,
-        p.PIN_24,
-        p.PIN_29,
-        p.DMA_CH0,
-    );
-
-    static STATE: StaticCell<cyw43::State> = StaticCell::new();
-    let state = STATE.init(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
-    unwrap!(spawner.spawn(wifi_task(runner)));
-
-    control.init(clm).await;
-    control
-        .set_power_management(cyw43::PowerManagementMode::PowerSave)
-        .await;
 
     // Set up USB bits
     // Create the driver, from the HAL.
@@ -210,21 +169,13 @@ async fn main(spawner: Spawner) {
         }
     };
 
-    let blinken_lights_future = async {
-        let mut state_of_led = false;
-        loop {
-            Timer::after(Duration::from_millis(1000)).await;
-            state_of_led = !state_of_led;
-            control.gpio_set(0, state_of_led).await;
-        }
-    };
-
     // Led Tasks
-    //unwrap!(spawner.spawn(toggle_led(&WHITE_LED,Duration::from_hz(10))));
-    //unwrap!(spawner.spawn(toggle_led(&GREEN_LED,Duration::from_hz(9))));
-    //unwrap!(spawner.spawn(toggle_led(&RED_LED,Duration::from_hz(8))));
-    //unwrap!(spawner.spawn(toggle_led(&BLUE_LED,Duration::from_hz(11))));
-    //unwrap!(spawner.spawn(toggle_led(&BACKLIGHT,Duration::from_hz(15))));
+    unwrap!(spawner.spawn(toggle_led(&DEBUG_LED, Duration::from_hz(24))));
+    unwrap!(spawner.spawn(toggle_led(&WHITE_LED, Duration::from_hz(10))));
+    unwrap!(spawner.spawn(toggle_led(&GREEN_LED, Duration::from_hz(9))));
+    unwrap!(spawner.spawn(toggle_led(&RED_LED, Duration::from_hz(8))));
+    unwrap!(spawner.spawn(toggle_led(&BLUE_LED, Duration::from_hz(11))));
+    unwrap!(spawner.spawn(toggle_led(&BACKLIGHT, Duration::from_hz(15))));
 
     // Jogball tasks
     unwrap!(spawner.spawn(jogball(&JOGBALL_UP, CHANNEL_JOGBALL.sender(), JogBall::UP)));
@@ -251,13 +202,7 @@ async fn main(spawner: Spawner) {
 
     log::info!("Starting up MultiChip on RP2040!");
     // Run everything concurrently.
-    // If we had made everything `'static` above instead, we could do this using separate tasks instead.
-    join3(
-        jogball_fut,
-        join(blinken_lights_future, usb_fut),
-        join(echo_fut, log_fut),
-    )
-    .await;
+    join3(jogball_fut, usb_fut, join(echo_fut, log_fut)).await;
 }
 
 #[embassy_executor::task(pool_size = 4)]
@@ -289,7 +234,7 @@ async fn click(
     }
 }
 
-#[embassy_executor::task(pool_size = 5)]
+#[embassy_executor::task(pool_size = 6)]
 async fn toggle_led(led: &'static LedType, delay: Duration) {
     let mut ticker = Ticker::every(delay);
     loop {
