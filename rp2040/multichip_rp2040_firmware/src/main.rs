@@ -3,20 +3,19 @@
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3};
+use embassy_futures::join::{join, join4};
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::peripherals::{PIO0, USB};
-
+use embassy_rp::uart;
 use embassy_rp::usb::{Driver, Instance};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::{Channel, Sender};
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Ticker};
+use embassy_time::{Duration, Instant, Ticker, Timer};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb_logger;
-
 use {defmt_rtt as _, panic_probe as _};
 
 #[link_section = ".boot_loader"]
@@ -40,16 +39,18 @@ static JOGBALL_DOWN: JogballButtonType = Mutex::new(None);
 static JOGBALL_LEFT: JogballButtonType = Mutex::new(None);
 static JOGBALL_RIGHT: JogballButtonType = Mutex::new(None);
 static JOGBALL_CLICK: ButtonType = Mutex::new(None);
+static USER_BUTTON_CLICK: ButtonType = Mutex::new(None);
 
 #[derive(Clone, Copy)]
-enum JogBall {
-    UP,
-    DOWN,
-    LEFT,
-    RIGHT,
-    CLICK,
+enum HumanInput {
+    JogUp,
+    JogDown,
+    JogLeft,
+    JogRight,
+    JogClick,
+    UserButtonClick,
 }
-static CHANNEL_JOGBALL: Channel<ThreadModeRawMutex, JogBall, 64> = Channel::new();
+static CHANNEL_JOGBALL: Channel<ThreadModeRawMutex, HumanInput, 64> = Channel::new();
 
 type LedType = Mutex<ThreadModeRawMutex, Option<Output<'static>>>;
 static DEBUG_LED: LedType = Mutex::new(None);
@@ -65,12 +66,17 @@ async fn main(spawner: Spawner) {
 
     let p = embassy_rp::init(Default::default());
 
+    let uart_config = uart::Config::default();
+    let mut uart = uart::Uart::new_blocking(p.UART0, p.PIN_0, p.PIN_1, uart_config);
+    uart.blocking_write("Hello World!\r\n".as_bytes()).unwrap();
+
     // Configure button/jogball inputs
     let jogball_up = Input::new(p.PIN_7, Pull::None);
     let jogball_down = Input::new(p.PIN_8, Pull::None);
     let jogball_left = Input::new(p.PIN_3, Pull::None);
     let jogball_right = Input::new(p.PIN_6, Pull::None); // verified
     let jogball_click = Input::new(p.PIN_2, Pull::Up);
+    let user_button_click = Input::new(p.PIN_24, Pull::Up);
     {
         // inner scope is so that once the mutex is written to, the MutexGuard is dropped, thus the Mutex is released
         *(JOGBALL_UP.lock().await) = Some(jogball_up);
@@ -78,6 +84,7 @@ async fn main(spawner: Spawner) {
         *(JOGBALL_LEFT.lock().await) = Some(jogball_left);
         *(JOGBALL_RIGHT.lock().await) = Some(jogball_right);
         *(JOGBALL_CLICK.lock().await) = Some(jogball_click);
+        *(USER_BUTTON_CLICK.lock().await) = Some(user_button_click);
     }
 
     // Configure various directly driven LEDs
@@ -101,11 +108,27 @@ async fn main(spawner: Spawner) {
         log::info!("Awaiting Jogball changes");
         loop {
             match CHANNEL_JOGBALL.receive().await {
-                JogBall::CLICK => log::info!("Jogball CLICK"),
-                JogBall::UP => log::info!("Jogball Up"),
-                JogBall::DOWN => log::info!("Jogball Down"),
-                JogBall::LEFT => log::info!("Jogball Left"),
-                JogBall::RIGHT => log::info!("Jogball Right"),
+                HumanInput::JogClick => log::info!("Jogball Click"),
+                HumanInput::JogUp => log::info!("Jogball Up"),
+                HumanInput::JogDown => log::info!("Jogball Down"),
+                HumanInput::JogLeft => log::info!("Jogball Left"),
+                HumanInput::JogRight => log::info!("Jogball Right"),
+                HumanInput::UserButtonClick => log::info!("User button clicked"),
+            }
+
+            match CHANNEL_JOGBALL.receive().await {
+                HumanInput::JogClick => {
+                    uart.blocking_write("Jogball Click\r\n".as_bytes()).unwrap()
+                }
+                HumanInput::JogUp => uart.blocking_write("Jogball Up\r\n".as_bytes()).unwrap(),
+                HumanInput::JogDown => uart.blocking_write("Jogball Down\r\n".as_bytes()).unwrap(),
+                HumanInput::JogLeft => uart.blocking_write("Jogball Left\r\n".as_bytes()).unwrap(),
+                HumanInput::JogRight => {
+                    uart.blocking_write("Jogball Right\r\n".as_bytes()).unwrap()
+                }
+                HumanInput::UserButtonClick => uart
+                    .blocking_write("User button clicked\r\n".as_bytes())
+                    .unwrap(),
             }
         }
     };
@@ -170,46 +193,72 @@ async fn main(spawner: Spawner) {
     };
 
     // Led Tasks
-    unwrap!(spawner.spawn(toggle_led(&DEBUG_LED, Duration::from_hz(24))));
-    unwrap!(spawner.spawn(toggle_led(&WHITE_LED, Duration::from_hz(10))));
-    unwrap!(spawner.spawn(toggle_led(&GREEN_LED, Duration::from_hz(9))));
-    unwrap!(spawner.spawn(toggle_led(&RED_LED, Duration::from_hz(8))));
-    unwrap!(spawner.spawn(toggle_led(&BLUE_LED, Duration::from_hz(11))));
-    unwrap!(spawner.spawn(toggle_led(&BACKLIGHT, Duration::from_hz(15))));
+    let multiple = 5;
+    unwrap!(spawner.spawn(toggle_led(
+        &DEBUG_LED,
+        Duration::from_millis(240) * multiple
+    )));
+    unwrap!(spawner.spawn(toggle_led(
+        &WHITE_LED,
+        Duration::from_millis(100) * multiple
+    )));
+    unwrap!(spawner.spawn(toggle_led(&GREEN_LED, Duration::from_millis(90) * multiple)));
+    unwrap!(spawner.spawn(toggle_led(&RED_LED, Duration::from_millis(80) * multiple)));
+    unwrap!(spawner.spawn(toggle_led(&BLUE_LED, Duration::from_millis(110) * multiple)));
+    unwrap!(spawner.spawn(toggle_led(
+        &BACKLIGHT,
+        Duration::from_millis(150) * multiple
+    )));
 
     // Jogball tasks
-    unwrap!(spawner.spawn(jogball(&JOGBALL_UP, CHANNEL_JOGBALL.sender(), JogBall::UP)));
+    unwrap!(spawner.spawn(jogball(
+        &JOGBALL_UP,
+        CHANNEL_JOGBALL.sender(),
+        HumanInput::JogUp
+    )));
     unwrap!(spawner.spawn(jogball(
         &JOGBALL_DOWN,
         CHANNEL_JOGBALL.sender(),
-        JogBall::DOWN
+        HumanInput::JogDown
     )));
     unwrap!(spawner.spawn(jogball(
         &JOGBALL_LEFT,
         CHANNEL_JOGBALL.sender(),
-        JogBall::LEFT
+        HumanInput::JogLeft
     )));
     unwrap!(spawner.spawn(jogball(
         &JOGBALL_RIGHT,
         CHANNEL_JOGBALL.sender(),
-        JogBall::RIGHT
+        HumanInput::JogRight
     )));
     unwrap!(spawner.spawn(click(
         &JOGBALL_CLICK,
         CHANNEL_JOGBALL.sender(),
-        JogBall::CLICK
+        HumanInput::JogClick
+    )));
+    unwrap!(spawner.spawn(click(
+        &USER_BUTTON_CLICK,
+        CHANNEL_JOGBALL.sender(),
+        HumanInput::UserButtonClick
     )));
 
     log::info!("Starting up MultiChip on RP2040!");
     // Run everything concurrently.
-    join3(jogball_fut, usb_fut, join(echo_fut, log_fut)).await;
+
+    embassy_futures::join::join3(
+        jogball_fut,
+        usb_fut,
+        //uart_heartbeat,
+        join(echo_fut, log_fut),
+    )
+    .await;
 }
 
 #[embassy_executor::task(pool_size = 4)]
 async fn jogball(
     jogball_btn: &'static JogballButtonType,
-    control: Sender<'static, ThreadModeRawMutex, JogBall, 64>,
-    direction: JogBall,
+    control: Sender<'static, ThreadModeRawMutex, HumanInput, 64>,
+    direction: HumanInput,
 ) {
     loop {
         let mut jogball_btn_unlocked = jogball_btn.lock().await;
@@ -221,11 +270,11 @@ async fn jogball(
         control.send(direction).await;
     }
 }
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = 2)]
 async fn click(
     btn: &'static ButtonType,
-    control: Sender<'static, ThreadModeRawMutex, JogBall, 64>,
-    direction: JogBall,
+    control: Sender<'static, ThreadModeRawMutex, HumanInput, 64>,
+    direction: HumanInput,
 ) {
     loop {
         let mut btn_unlocked = btn.lock().await;
