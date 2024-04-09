@@ -1,5 +1,6 @@
 build-padded-bootloader:
 	cd ../rp2040-serial-bootloader/ \
+		&& PICO_SDK_FETCH_FROM_GIT=yes cmake . \
 		&& cmake . \
 		&& make clean \
 		&& make
@@ -11,7 +12,8 @@ build-serial-flash:
 		go build -o serial-flash
 	cp ../../rv1106/serial-flash/serial-flash tools/serial-flash
 
-build: build-serial-flash build-padded-bootloader
+build-deps: build-serial-flash build-padded-bootloader
+build: build-deps
 	cargo build
 
 do-usb-flash:
