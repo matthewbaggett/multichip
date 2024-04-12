@@ -18,9 +18,9 @@ use embassy_usb::driver::EndpointError;
 use embassy_usb_logger;
 use {defmt_rtt as _, panic_probe as _};
 
-#[link_section = ".boot3"]
+#[link_section = ".serial_bootloader"]
 #[used]
-pub static SERIAL_BOOTLOADER: [u8; 11520] = *include_bytes!("../../rp2040-serial-bootloader/flash.bin");
+pub static BOOTLOADER: [u8; 11316] = *include_bytes!("../firmware/serial-bootloader.bin");
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
