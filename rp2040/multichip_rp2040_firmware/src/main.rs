@@ -1,21 +1,34 @@
 #![no_std]
 #![no_main]
 
+use core::cell::RefCell;
 use defmt::*;
+use embassy_embedded_hal::shared_bus::blocking::spi::SpiDeviceWithConfig;
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::peripherals::{PIO0, USB};
+use embassy_rp::spi;
+use embassy_rp::spi::{Blocking, Spi};
 use embassy_rp::uart;
 use embassy_rp::usb::{Driver, Instance};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
 use embassy_sync::channel::{Channel, Sender};
 use embassy_sync::mutex::Mutex;
-use embassy_time::{Duration, Instant, Ticker, Timer};
+use embassy_time::{Delay, Duration, Ticker};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb_logger;
+use embedded_graphics::image::{Image, ImageRawLE};
+use embedded_graphics::mono_font::ascii::FONT_10X20;
+use embedded_graphics::mono_font::MonoTextStyle;
+use embedded_graphics::prelude::*;
+//use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
+use crate::my_display_interface::SPIDeviceInterface;
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::text::Text;
+use st7789::{Orientation, ST7789};
 use {defmt_rtt as _, panic_probe as _};
 
 #[link_section = ".serial_bootloader"]
@@ -86,24 +99,6 @@ async fn main(spawner: Spawner) {
         *(JOGBALL_CLICK.lock().await) = Some(jogball_click);
         *(USER_BUTTON_CLICK.lock().await) = Some(user_button_click);
     }
-
-    // Configure various directly driven LEDs
-    let debug_led = Output::new(AnyPin::from(p.PIN_25), Level::Low);
-    let white_led = Output::new(AnyPin::from(p.PIN_9), Level::Low);
-    let green_led = Output::new(AnyPin::from(p.PIN_10), Level::Low);
-    let red_led = Output::new(AnyPin::from(p.PIN_12), Level::Low);
-    let blue_led = Output::new(AnyPin::from(p.PIN_11), Level::Low);
-    let backlight = Output::new(AnyPin::from(p.PIN_13), Level::Low);
-    {
-        // inner scope is so that once the mutex is written to, the MutexGuard is dropped, thus the Mutex is released
-        *(DEBUG_LED.lock().await) = Some(debug_led);
-        *(WHITE_LED.lock().await) = Some(white_led);
-        *(GREEN_LED.lock().await) = Some(green_led);
-        *(RED_LED.lock().await) = Some(red_led);
-        *(BLUE_LED.lock().await) = Some(blue_led);
-        *(BACKLIGHT.lock().await) = Some(backlight);
-    }
-
     let jogball_fut = async {
         log::info!("Awaiting Jogball changes");
         loop {
@@ -126,6 +121,72 @@ async fn main(spawner: Spawner) {
             }
         }
     };
+
+    // Configure various directly driven LEDs
+    let debug_led = Output::new(AnyPin::from(p.PIN_25), Level::Low);
+    let white_led = Output::new(AnyPin::from(p.PIN_9), Level::Low);
+    let green_led = Output::new(AnyPin::from(p.PIN_10), Level::Low);
+    let red_led = Output::new(AnyPin::from(p.PIN_12), Level::Low);
+    let blue_led = Output::new(AnyPin::from(p.PIN_11), Level::Low);
+    let mut backlight = Output::new(AnyPin::from(p.PIN_13), Level::Low);
+    backlight.set_high();
+    {
+        // inner scope is so that once the mutex is written to, the MutexGuard is dropped, thus the Mutex is released
+        *(DEBUG_LED.lock().await) = Some(debug_led);
+        *(WHITE_LED.lock().await) = Some(white_led);
+        *(GREEN_LED.lock().await) = Some(green_led);
+        *(RED_LED.lock().await) = Some(red_led);
+        *(BLUE_LED.lock().await) = Some(blue_led);
+        *(BACKLIGHT.lock().await) = Some(backlight);
+    }
+
+    // SPI stuff
+    let spi_miso = p.PIN_16; // not used
+    let spi_mosi = p.PIN_19;
+    let spi_clk = p.PIN_18;
+
+    // Display stuff
+    let disp_reset = p.PIN_21;
+    let disp_dc = p.PIN_20; // Display Data/Command pin.
+    let disp_select = p.PIN_17; // not used.
+
+    let mut display_config = spi::Config::default();
+    display_config.frequency = 64_000_000;
+    display_config.phase = spi::Phase::CaptureOnSecondTransition;
+    display_config.polarity = spi::Polarity::IdleHigh;
+    let mut touch_config = spi::Config::default();
+
+    let spi: Spi<'_, _, Blocking> = Spi::new_blocking(p.SPI0, spi_clk, spi_mosi, spi_miso, touch_config.clone());
+    let spi_bus: embassy_sync::blocking_mutex::Mutex<NoopRawMutex, _> = embassy_sync::blocking_mutex::Mutex::new(RefCell::new(spi));
+
+    let display_spi = SpiDeviceWithConfig::new(&spi_bus, Output::new(disp_select, Level::High), display_config);
+
+    let disp_dc = Output::new(disp_dc, Level::Low); // Data/Command pin. 0 = command, 1 = data
+    let disp_reset = Output::new(disp_reset, Level::Low);
+
+    // display interface abstraction from SPI and DC
+    let di = SPIDeviceInterface::new(display_spi, disp_dc);
+
+    // create driver
+    let mut display = ST7789::new(di, disp_reset, 240, 240);
+
+    // initialize
+    display.init(&mut Delay).unwrap();
+
+    // set default orientation
+    display.set_orientation(Orientation::Landscape).unwrap();
+
+    display.clear(Rgb565::BLACK).unwrap();
+
+    let raw_image_data = ImageRawLE::new(include_bytes!("./ferris.raw"), 86);
+    let ferris = Image::new(&raw_image_data, Point::new(34, 68));
+
+    // Display the image
+    ferris.draw(&mut display).unwrap();
+
+    // Write some text.
+    let style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
+    Text::new("Hello embedded_graphics \n + embassy + RP2040!", Point::new(20, 200), style).draw(&mut display).unwrap();
 
     // Set up USB bits
     // Create the driver, from the HAL.
@@ -268,6 +329,140 @@ async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) 
         info!("data: {:x}", data);
         for _ in 1..2 {
             class.write_packet(data).await?;
+        }
+    }
+}
+mod my_display_interface {
+    use display_interface::{DataFormat, DisplayError, WriteOnlyDataCommand};
+    use embedded_hal_1::digital::OutputPin;
+    use embedded_hal_1::spi::SpiDevice;
+
+    /// SPI display interface.
+    ///
+    /// This combines the SPI peripheral and a data/command pin
+    pub struct SPIDeviceInterface<SPI, DC> {
+        spi: SPI,
+        dc: DC,
+    }
+
+    impl<SPI, DC> SPIDeviceInterface<SPI, DC>
+    where
+        SPI: SpiDevice,
+        DC: OutputPin,
+    {
+        /// Create new SPI interface for communciation with a display driver
+        pub fn new(spi: SPI, dc: DC) -> Self {
+            Self { spi, dc }
+        }
+    }
+
+    impl<SPI, DC> WriteOnlyDataCommand for SPIDeviceInterface<SPI, DC>
+    where
+        SPI: SpiDevice,
+        DC: OutputPin,
+    {
+        fn send_commands(&mut self, cmds: DataFormat<'_>) -> Result<(), DisplayError> {
+            // 1 = data, 0 = command
+            self.dc.set_low().map_err(|_| DisplayError::DCError)?;
+
+            send_u8(&mut self.spi, cmds).map_err(|_| DisplayError::BusWriteError)?;
+            Ok(())
+        }
+
+        fn send_data(&mut self, buf: DataFormat<'_>) -> Result<(), DisplayError> {
+            // 1 = data, 0 = command
+            self.dc.set_high().map_err(|_| DisplayError::DCError)?;
+
+            send_u8(&mut self.spi, buf).map_err(|_| DisplayError::BusWriteError)?;
+            Ok(())
+        }
+    }
+
+    fn send_u8<T: SpiDevice>(spi: &mut T, words: DataFormat<'_>) -> Result<(), T::Error> {
+        match words {
+            DataFormat::U8(slice) => spi.write(slice),
+            DataFormat::U16(slice) => {
+                use byte_slice_cast::*;
+                spi.write(slice.as_byte_slice())
+            }
+            DataFormat::U16LE(slice) => {
+                use byte_slice_cast::*;
+                for v in slice.as_mut() {
+                    *v = v.to_le();
+                }
+                spi.write(slice.as_byte_slice())
+            }
+            DataFormat::U16BE(slice) => {
+                use byte_slice_cast::*;
+                for v in slice.as_mut() {
+                    *v = v.to_be();
+                }
+                spi.write(slice.as_byte_slice())
+            }
+            DataFormat::U8Iter(iter) => {
+                let mut buf = [0; 32];
+                let mut i = 0;
+
+                for v in iter.into_iter() {
+                    buf[i] = v;
+                    i += 1;
+
+                    if i == buf.len() {
+                        spi.write(&buf)?;
+                        i = 0;
+                    }
+                }
+
+                if i > 0 {
+                    spi.write(&buf[..i])?;
+                }
+
+                Ok(())
+            }
+            DataFormat::U16LEIter(iter) => {
+                use byte_slice_cast::*;
+                let mut buf = [0; 32];
+                let mut i = 0;
+
+                for v in iter.map(u16::to_le) {
+                    buf[i] = v;
+                    i += 1;
+
+                    if i == buf.len() {
+                        spi.write(&buf.as_byte_slice())?;
+                        i = 0;
+                    }
+                }
+
+                if i > 0 {
+                    spi.write(&buf[..i].as_byte_slice())?;
+                }
+
+                Ok(())
+            }
+            DataFormat::U16BEIter(iter) => {
+                use byte_slice_cast::*;
+                let mut buf = [0; 64];
+                let mut i = 0;
+                let len = buf.len();
+
+                for v in iter.map(u16::to_be) {
+                    buf[i] = v;
+                    i += 1;
+
+                    if i == len {
+                        spi.write(&buf.as_byte_slice())?;
+                        i = 0;
+                    }
+                }
+
+                if i > 0 {
+                    spi.write(&buf[..i].as_byte_slice())?;
+                }
+
+                Ok(())
+            }
+            _ => unimplemented!(),
         }
     }
 }
