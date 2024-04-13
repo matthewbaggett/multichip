@@ -8,8 +8,8 @@ build-bootloader:
 
 build-serial-flash:
 	cd ../../rv1106/serial-flash && \
-		go build -o serial-flash
-	cp ../../rv1106/serial-flash/serial-flash tools/serial-flash
+		go build -o ../../rp2040/multichip-firmware-rp2040/tools/serial-flash-amd64
+	mv ../../rv1106/serial-flash/serial-flash-amd64 tools/serial-flash
 
 build-deps: build-serial-flash build-bootloader
 build: build-deps
@@ -22,6 +22,16 @@ build: build-deps
 		--only-section=.rodata \
 		./target/thumbv6m-none-eabi/debug/multichip-firmware-rp2040.elf \
 		./target/thumbv6m-none-eabi/debug/multichip-firmware-rp2040.FLASH.bin
+release:
+	cargo build --release
+	cp ./target/thumbv6m-none-eabi/release/multichip-firmware-rp2040 ./target/thumbv6m-none-eabi/release/multichip-firmware-rp2040.elf
+	/usr/lib/arm-none-eabi/bin/objcopy \
+		-Obinary \
+		--only-section=.vector_table \
+		--only-section=.text \
+		--only-section=.rodata \
+		./target/thumbv6m-none-eabi/release/multichip-firmware-rp2040.elf \
+		./target/thumbv6m-none-eabi/release/multichip-firmware-rp2040.FLASH.bin
 
 do-usb-flash: build
 	../rp2040-serial-bootloader/gen_imghdr.py \

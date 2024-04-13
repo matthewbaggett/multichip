@@ -3,3 +3,5 @@
 luckfox_pico_mini_b_image
 upgrade_tool
 AlpineLinux
+/fs/usr/bin/serial-flash
+/fs/lib/firmware/*.bin
