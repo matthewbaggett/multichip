@@ -117,18 +117,12 @@ async fn main(spawner: Spawner) {
             }
 
             match CHANNEL_JOGBALL.receive().await {
-                HumanInput::JogClick => {
-                    uart.blocking_write("Jogball Click\r\n".as_bytes()).unwrap()
-                }
+                HumanInput::JogClick => uart.blocking_write("Jogball Click\r\n".as_bytes()).unwrap(),
                 HumanInput::JogUp => uart.blocking_write("Jogball Up\r\n".as_bytes()).unwrap(),
                 HumanInput::JogDown => uart.blocking_write("Jogball Down\r\n".as_bytes()).unwrap(),
                 HumanInput::JogLeft => uart.blocking_write("Jogball Left\r\n".as_bytes()).unwrap(),
-                HumanInput::JogRight => {
-                    uart.blocking_write("Jogball Right\r\n".as_bytes()).unwrap()
-                }
-                HumanInput::UserButtonClick => uart
-                    .blocking_write("User button clicked\r\n".as_bytes())
-                    .unwrap(),
+                HumanInput::JogRight => uart.blocking_write("Jogball Right\r\n".as_bytes()).unwrap(),
+                HumanInput::UserButtonClick => uart.blocking_write("User button clicked\r\n".as_bytes()).unwrap(),
             }
         }
     };
@@ -175,8 +169,7 @@ async fn main(spawner: Spawner) {
 
     // Creates the logger and returns the logger future
     // Note: You'll need to use log::info! afterwards instead of info! for this to work (this also applies to all the other log::* macros)
-    let log_fut =
-        embassy_usb_logger::with_class!(1024, log::LevelFilter::Info, serial_logger_acm_class);
+    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Info, serial_logger_acm_class);
 
     // Build the builder.
     let mut usb = builder.build();
@@ -194,50 +187,20 @@ async fn main(spawner: Spawner) {
 
     // Led Tasks
     let multiple = 5;
-    unwrap!(spawner.spawn(toggle_led(
-        &DEBUG_LED,
-        Duration::from_millis(240) * multiple
-    )));
-    unwrap!(spawner.spawn(toggle_led(
-        &WHITE_LED,
-        Duration::from_millis(100) * multiple
-    )));
+    unwrap!(spawner.spawn(toggle_led(&DEBUG_LED, Duration::from_millis(240) * multiple)));
+    unwrap!(spawner.spawn(toggle_led(&WHITE_LED, Duration::from_millis(100) * multiple)));
     unwrap!(spawner.spawn(toggle_led(&GREEN_LED, Duration::from_millis(90) * multiple)));
     //unwrap!(spawner.spawn(toggle_led(&RED_LED,   Duration::from_millis(80) * multiple)));
     //unwrap!(spawner.spawn(toggle_led(&BLUE_LED,  Duration::from_millis(110) * multiple)));
     //unwrap!(spawner.spawn(toggle_led(&BACKLIGHT, Duration::from_millis(150) * multiple)));
 
     // Jogball tasks
-    unwrap!(spawner.spawn(jogball(
-        &JOGBALL_UP,
-        CHANNEL_JOGBALL.sender(),
-        HumanInput::JogUp
-    )));
-    unwrap!(spawner.spawn(jogball(
-        &JOGBALL_DOWN,
-        CHANNEL_JOGBALL.sender(),
-        HumanInput::JogDown
-    )));
-    unwrap!(spawner.spawn(jogball(
-        &JOGBALL_LEFT,
-        CHANNEL_JOGBALL.sender(),
-        HumanInput::JogLeft
-    )));
-    unwrap!(spawner.spawn(jogball(
-        &JOGBALL_RIGHT,
-        CHANNEL_JOGBALL.sender(),
-        HumanInput::JogRight
-    )));
-    unwrap!(spawner.spawn(click(
-        &JOGBALL_CLICK,
-        CHANNEL_JOGBALL.sender(),
-        HumanInput::JogClick
-    )));
-    unwrap!(spawner.spawn(click(
-        &USER_BUTTON_CLICK,
-        CHANNEL_JOGBALL.sender(),
-        HumanInput::UserButtonClick
-    )));
+    unwrap!(spawner.spawn(jogball(&JOGBALL_UP, CHANNEL_JOGBALL.sender(), HumanInput::JogUp)));
+    unwrap!(spawner.spawn(jogball(&JOGBALL_DOWN, CHANNEL_JOGBALL.sender(), HumanInput::JogDown)));
+    unwrap!(spawner.spawn(jogball(&JOGBALL_LEFT, CHANNEL_JOGBALL.sender(), HumanInput::JogLeft)));
+    unwrap!(spawner.spawn(jogball(&JOGBALL_RIGHT, CHANNEL_JOGBALL.sender(), HumanInput::JogRight)));
+    unwrap!(spawner.spawn(click(&JOGBALL_CLICK, CHANNEL_JOGBALL.sender(), HumanInput::JogClick)));
+    unwrap!(spawner.spawn(click(&USER_BUTTON_CLICK, CHANNEL_JOGBALL.sender(), HumanInput::UserButtonClick)));
 
     log::info!("Starting up MultiChip on RP2040!");
     // Run everything concurrently.
@@ -252,27 +215,15 @@ async fn main(spawner: Spawner) {
 }
 
 #[embassy_executor::task(pool_size = 4)]
-async fn jogball(
-    jogball_btn: &'static JogballButtonType,
-    control: Sender<'static, ThreadModeRawMutex, HumanInput, 64>,
-    direction: HumanInput,
-) {
+async fn jogball(jogball_btn: &'static JogballButtonType, control: Sender<'static, ThreadModeRawMutex, HumanInput, 64>, direction: HumanInput) {
     loop {
         let mut jogball_btn_unlocked = jogball_btn.lock().await;
-        jogball_btn_unlocked
-            .as_mut()
-            .unwrap()
-            .wait_for_any_edge()
-            .await;
+        jogball_btn_unlocked.as_mut().unwrap().wait_for_any_edge().await;
         control.send(direction).await;
     }
 }
 #[embassy_executor::task(pool_size = 2)]
-async fn click(
-    btn: &'static ButtonType,
-    control: Sender<'static, ThreadModeRawMutex, HumanInput, 64>,
-    direction: HumanInput,
-) {
+async fn click(btn: &'static ButtonType, control: Sender<'static, ThreadModeRawMutex, HumanInput, 64>, direction: HumanInput) {
     loop {
         let mut btn_unlocked = btn.lock().await;
         btn_unlocked.as_mut().unwrap().wait_for_falling_edge().await;
@@ -307,9 +258,7 @@ impl From<EndpointError> for Disconnected {
     }
 }
 
-async fn echo<'d, T: Instance + 'd>(
-    class: &mut CdcAcmClass<'d, Driver<'d, T>>,
-) -> Result<(), Disconnected> {
+async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) -> Result<(), Disconnected> {
     let mut buf = [0; 64];
     info!("Entered echo async");
     loop {
