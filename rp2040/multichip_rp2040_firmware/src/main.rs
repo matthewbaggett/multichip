@@ -8,7 +8,8 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
-use embassy_rp::peripherals::{PIO0, USB};
+use embassy_rp::i2c::{self, Config, InterruptHandler};
+use embassy_rp::peripherals::{I2C0, PIO0, USB};
 use embassy_rp::spi;
 use embassy_rp::spi::{Blocking, Spi};
 use embassy_rp::uart;
@@ -24,6 +25,7 @@ use embedded_graphics::image::{Image, ImageRawLE};
 use embedded_graphics::mono_font::ascii::FONT_10X20;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::*;
+use embedded_hal_async::i2c::I2c;
 //use embedded_graphics::primitives::{PrimitiveStyleBuilder, Rectangle};
 use crate::my_display_interface::SPIDeviceInterface;
 use embedded_graphics::pixelcolor::Rgb565;
@@ -36,6 +38,7 @@ use {defmt_rtt as _, panic_probe as _};
 pub static BOOTLOADER: [u8; 11316] = *include_bytes!("../firmware/serial-bootloader.bin");
 
 bind_interrupts!(struct Irqs {
+        I2C0_IRQ => InterruptHandler<I2C0>;
     PIO0_IRQ_0 => embassy_rp::pio::InterruptHandler<PIO0>;
     USBCTRL_IRQ => embassy_rp::usb::InterruptHandler<USB>;
 });
@@ -140,6 +143,13 @@ async fn main(spawner: Spawner) {
         *(BACKLIGHT.lock().await) = Some(backlight);
     }
 
+    // i2c stuff
+    let i2c_sda = p.PIN_4;
+    let i2c_scl = p.PIN_5;
+
+    info!("set up i2c ");
+    let mut i2c = i2c::I2c::new_async(p.I2C0, i2c_scl, i2c_sda, Irqs, Config::default());
+
     // SPI stuff
     let spi_miso = p.PIN_16; // not used
     let spi_mosi = p.PIN_19;
@@ -154,9 +164,8 @@ async fn main(spawner: Spawner) {
     display_config.frequency = 64_000_000;
     display_config.phase = spi::Phase::CaptureOnSecondTransition;
     display_config.polarity = spi::Polarity::IdleHigh;
-    let mut touch_config = spi::Config::default();
 
-    let spi: Spi<'_, _, Blocking> = Spi::new_blocking(p.SPI0, spi_clk, spi_mosi, spi_miso, touch_config.clone());
+    let spi: Spi<'_, _, Blocking> = Spi::new_blocking(p.SPI0, spi_clk, spi_mosi, spi_miso, display_config.clone());
     let spi_bus: embassy_sync::blocking_mutex::Mutex<NoopRawMutex, _> = embassy_sync::blocking_mutex::Mutex::new(RefCell::new(spi));
 
     let display_spi = SpiDeviceWithConfig::new(&spi_bus, Output::new(disp_select, Level::High), display_config);
@@ -181,10 +190,10 @@ async fn main(spawner: Spawner) {
     let raw_image_data = ImageRawLE::new(include_bytes!("./ferris.raw"), 86);
     let ferris = Image::new(&raw_image_data, Point::new(34, 68));
 
-    // Display the image
+    // Display a test image
     ferris.draw(&mut display).unwrap();
 
-    // Write some text.
+    // Write some test text.
     let style = MonoTextStyle::new(&FONT_10X20, Rgb565::GREEN);
     Text::new("Hello embedded_graphics \n + embassy + RP2040!", Point::new(20, 200), style).draw(&mut display).unwrap();
 
