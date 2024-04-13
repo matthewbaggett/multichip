@@ -1,10 +1,9 @@
-build-rv1106-bins: build-rv1106-serial-flash
-	chmod +x rv1106/fs/usr/bin/*
+.PHONY: rv1106 rp2040
+rv1106:
 
-build-rv1106-serial-flash:
-	cd rv1106/serial-flash; \
-	env GOOS=linux GOARCH=arm go build -o serial-flash -ldflags="-s -w";
-	cp rv1106/serial-flash/serial-flash rv1106/fs/usr/bin/serial-flash
+rp2040:
+	#make -C rv1106 update-rv1106-bins
+	make -C rp2040/multichip_rp2040_firmware do-indirect-flash
 
-update-rv1106-bins: build-rv1106-bins
-	scp -rp rv1106/fs/usr rv1106:/
+rp2040-reset:
+	ssh rv1106 -C "rp2040-flash-disable; rp2040-reset"

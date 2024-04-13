@@ -1,4 +1,3 @@
-build-bins: build-serial-flash build-rp2040-firmware
 build-rp2040-firmware:
 	mkdir -p fs/lib/firmware
 	cd ../rp2040/multichip_rp2040_firmware/ && \
@@ -8,7 +7,8 @@ build-serial-flash:
 	cd serial-flash && \
 	GOOS=linux GOARCH=arm go build -o serial-flash-arm -ldflags="-s -w"
 	mv serial-flash/serial-flash-arm fs/usr/bin/serial-flash
-copy-over: build-bins
+build-bins: build-serial-flash build-rp2040-firmware
+update-rv1106-bins: build-bins
 	chmod +x fs/usr/bin/*
 	scp \
 		-rp \

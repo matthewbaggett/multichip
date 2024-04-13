@@ -1,4 +1,7 @@
 #!/bin/sh
+# Take an argument for the reset delay called DELAY, if not set, default to 2 seconds
+DELAY=${1:-0.5}
 rp2040-reset-hold
-sleep 2
+echo "RP2040: Holding RP2040 in reset for ${DELAY} seconds"
+sleep $DELAY
 rp2040-reset-release

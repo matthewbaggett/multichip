@@ -1,5 +1,5 @@
 #!/bin/sh
-echo "Putting RP2040 into serial flash mode..."
+echo "RP2040: Setting serial flash mode..."
 echo "55" > /sys/class/gpio/export || true
 echo "out" > /sys/class/gpio/gpio55/direction
 echo 0 > /sys/class/gpio/gpio55/value

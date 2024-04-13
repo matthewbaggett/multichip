@@ -9,9 +9,8 @@ build-bootloader:
 build-serial-flash:
 	cd ../../rv1106/serial-flash && \
 		go build -o ../../rp2040/multichip-firmware-rp2040/tools/serial-flash-amd64
-	mv ../../rv1106/serial-flash/serial-flash-amd64 tools/serial-flash
 
-build-deps: build-serial-flash build-bootloader
+build-deps: build-bootloader
 build: build-deps
 	cargo build
 	cp ./target/thumbv6m-none-eabi/debug/multichip-firmware-rp2040 ./target/thumbv6m-none-eabi/debug/multichip-firmware-rp2040.elf
@@ -52,3 +51,8 @@ test-all-flash:
 	sleep 5;
 	$(MAKE) do-serial-flash
 
+update-rv1106-bins:
+	$(MAKE) -C ../../rv1106 update-rv1106-bins
+do-indirect-flash: update-rv1106-bins build
+	scp ./target/thumbv6m-none-eabi/debug/multichip-firmware-rp2040.FLASH.bin rv1106:/tmp/new-firmware.bin
+	ssh rv1106 -C "rp2040-update /tmp/new-firmware.bin"

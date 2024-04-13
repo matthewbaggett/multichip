@@ -1,7 +1,18 @@
 #!/bin/sh
-set -xe
+# Throw an error message if $1 is not set
+if [ -z "$1" ]; then
+    echo "Usage: $0 <firmware.bin>"
+    exit 1
+fi
+
+FIRMWARE=$1
+DELAY=0.1
+SERIAL_PORT=/dev/ttyS3
+
 rp2040-flash-enable
 rp2040-reset
-sleep 2
-serial-flash /dev/ttyS3 /lib/firmware/multichip-rp2040.release.bin 0x10004000
+echo "RP2040: Waiting ${DELAY} seconds for RP2040 to boot..."
+sleep ${DELAY}
+echo "RP2040: Flashing firmware ${FIRMWARE} over ${SERIAL_PORT}..."
+serial-flash ${SERIAL_PORT} ${FIRMWARE} 0x10004000
 rp2040-flash-disable
