@@ -3,7 +3,7 @@
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join4};
+use embassy_futures::join::join;
 use embassy_rp::bind_interrupts;
 use embassy_rp::gpio::{AnyPin, Input, Level, Output, Pull};
 use embassy_rp::peripherals::{PIO0, USB};
@@ -203,12 +203,9 @@ async fn main(spawner: Spawner) {
         Duration::from_millis(100) * multiple
     )));
     unwrap!(spawner.spawn(toggle_led(&GREEN_LED, Duration::from_millis(90) * multiple)));
-    unwrap!(spawner.spawn(toggle_led(&RED_LED, Duration::from_millis(80) * multiple)));
-    unwrap!(spawner.spawn(toggle_led(&BLUE_LED, Duration::from_millis(110) * multiple)));
-    unwrap!(spawner.spawn(toggle_led(
-        &BACKLIGHT,
-        Duration::from_millis(150) * multiple
-    )));
+    //unwrap!(spawner.spawn(toggle_led(&RED_LED,   Duration::from_millis(80) * multiple)));
+    //unwrap!(spawner.spawn(toggle_led(&BLUE_LED,  Duration::from_millis(110) * multiple)));
+    //unwrap!(spawner.spawn(toggle_led(&BACKLIGHT, Duration::from_millis(150) * multiple)));
 
     // Jogball tasks
     unwrap!(spawner.spawn(jogball(
